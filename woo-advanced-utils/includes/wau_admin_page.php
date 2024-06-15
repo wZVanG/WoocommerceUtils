@@ -76,7 +76,7 @@ function wau_submenu_settings_settings()
 				</td>
 			</tr>
             
-            <tr valign="top">
+            <tr valign="top" style="display:none">
                 <th scope="row" class="titledesc">
                     <label>Formato</label>
                 </th>

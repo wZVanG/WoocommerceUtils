@@ -28,13 +28,17 @@ function custom_get_advanced_products($request) {
 
     // Procede con la consulta a la base de datos
     $placeholders = implode(',', array_fill(0, count($skus), '%s'));
-    $query = $wpdb->prepare("
-        SELECT p.ID, p.post_title, pm.meta_value as sku
-        FROM {$wpdb->prefix}posts p
-        INNER JOIN {$wpdb->prefix}postmeta pm ON p.ID = pm.post_id
-        WHERE pm.meta_key = '_sku' AND pm.meta_value IN ($placeholders)
-        AND p.post_type = 'product' AND p.post_status = 'publish'
-    ", $skus);
+
+	//Query to get the products (ID, name, sku, stock) with the given SKUs
+	$query = $wpdb->prepare("
+		SELECT p.ID, p.post_title, pm.meta_value as sku, pm2.meta_value as stock_quantity
+		FROM {$wpdb->prefix}posts p
+		INNER JOIN {$wpdb->prefix}postmeta pm ON p.ID = pm.post_id
+		INNER JOIN {$wpdb->prefix}postmeta pm2 ON p.ID = pm2.post_id
+		WHERE pm.meta_key = '_sku' AND pm.meta_value IN ($placeholders)
+		AND pm2.meta_key = '_stock'
+		AND p.post_type = 'product' AND p.post_status = 'publish'
+	", $skus);
 
     $results = $wpdb->get_results($query);
 
@@ -46,6 +50,7 @@ function custom_get_advanced_products($request) {
             'id' => (int) $result->ID,
             'name' => $result->post_title,
             'sku' => $result->sku,
+			'stock_quantity' => (float) $result->stock_quantity
         ];
     }
 
