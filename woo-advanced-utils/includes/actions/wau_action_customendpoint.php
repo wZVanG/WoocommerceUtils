@@ -31,13 +31,24 @@ function custom_get_advanced_products($request) {
 
 	//Query to get the products (ID, name, sku, stock) with the given SKUs
 	$query = $wpdb->prepare("
-		SELECT p.ID, p.post_title, pm.meta_value as sku, pm2.meta_value as stock_quantity
-		FROM {$wpdb->prefix}posts p
-		INNER JOIN {$wpdb->prefix}postmeta pm ON p.ID = pm.post_id
-		INNER JOIN {$wpdb->prefix}postmeta pm2 ON p.ID = pm2.post_id
-		WHERE pm.meta_key = '_sku' AND pm.meta_value IN ($placeholders)
-		AND pm2.meta_key = '_stock'
-		AND p.post_type = 'product' AND p.post_status = 'publish'
+       	SELECT 
+            p.ID, 
+            p.post_title, 
+            sku.meta_value as sku, 
+            stock.meta_value as stock_quantity, 
+            price.meta_value as regular_price,
+            ean.meta_value as ean
+        FROM {$wpdb->prefix}posts p
+        INNER JOIN {$wpdb->prefix}postmeta sku ON p.ID = sku.post_id
+        INNER JOIN {$wpdb->prefix}postmeta stock ON p.ID = stock.post_id
+        INNER JOIN {$wpdb->prefix}postmeta price ON p.ID = price.post_id
+        LEFT JOIN {$wpdb->prefix}postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
+        WHERE sku.meta_key = '_sku' 
+        AND sku.meta_value IN ($placeholders)
+        AND stock.meta_key = '_stock'
+        AND price.meta_key = '_regular_price'
+        AND p.post_type = 'product' 
+        AND p.post_status = 'publish'
 	", $skus);
 
     $results = $wpdb->get_results($query);
@@ -46,11 +57,13 @@ function custom_get_advanced_products($request) {
 
     $items = [];
     foreach ($results as $result) {
-        $items[] = [
+		$items[] = [
             'id' => (int) $result->ID,
             'name' => $result->post_title,
             'sku' => $result->sku,
-			'stock_quantity' => (float) $result->stock_quantity
+            'stock_quantity' => (float) $result->stock_quantity,
+            'regular_price' => (float) $result->regular_price,
+            'ean' => $result->ean ? $result->ean : null
         ];
     }
 
