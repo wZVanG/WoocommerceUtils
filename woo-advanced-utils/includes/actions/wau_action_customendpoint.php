@@ -29,26 +29,33 @@ function custom_get_advanced_products($request) {
     // Procede con la consulta a la base de datos
     $placeholders = implode(',', array_fill(0, count($skus), '%s'));
 
-	//Query to get the products (ID, name, sku, stock) with the given SKUs
+	// Query to get the products (ID, name, sku, stock) with the given SKUs
+	// Obtener también low_stock_amount, short_description
+
 	$query = $wpdb->prepare("
        	SELECT 
-            p.ID, 
-            p.post_title, 
-            sku.meta_value as sku, 
-            stock.meta_value as stock_quantity, 
-            price.meta_value as regular_price,
-            ean.meta_value as ean
+			p.ID, 
+			p.post_title, 
+			sku.meta_value as sku, 
+			stock.meta_value as stock_quantity, 
+			price.meta_value as regular_price,
+			ean.meta_value as ean,
+			low_stock.meta_value as low_stock_amount,
+			p.post_excerpt as short_description
+
         FROM {$wpdb->prefix}posts p
         INNER JOIN {$wpdb->prefix}postmeta sku ON p.ID = sku.post_id
         INNER JOIN {$wpdb->prefix}postmeta stock ON p.ID = stock.post_id
         INNER JOIN {$wpdb->prefix}postmeta price ON p.ID = price.post_id
+
         LEFT JOIN {$wpdb->prefix}postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
+		LEFT JOIN {$wpdb->prefix}postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
+
         WHERE sku.meta_key = '_sku' 
         AND sku.meta_value IN ($placeholders)
         AND stock.meta_key = '_stock'
         AND price.meta_key = '_regular_price'
-        AND p.post_type = 'product' 
-        AND p.post_status = 'publish'
+        AND p.post_type = 'product'
 	", $skus);
 
     $results = $wpdb->get_results($query);
@@ -61,9 +68,11 @@ function custom_get_advanced_products($request) {
             'id' => (int) $result->ID,
             'name' => $result->post_title,
             'sku' => $result->sku,
-            'stock_quantity' => (float) $result->stock_quantity,
-            'regular_price' => (float) $result->regular_price,
-            'ean' => $result->ean ? $result->ean : null
+            'stock_quantity' => round((float) $result->stock_quantity, 4),
+            'regular_price' => round((float) $result->regular_price, 4),
+            'ean' => $result->ean ? $result->ean : null,
+			'low_stock_amount' => $result->low_stock_amount ? round((float) $result->low_stock_amount, 4) : null,
+			'short_description' => is_string($result->short_description) ? trim($result->short_description) : null
         ];
     }
 
