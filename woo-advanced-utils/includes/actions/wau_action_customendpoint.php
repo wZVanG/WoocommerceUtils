@@ -9,7 +9,35 @@ add_action('rest_api_init', function(){
 		'methods' => 'GET',
 		'callback' => 'custom_get_advanced_products'
 	));
+
+	register_rest_route('wc/v3', '/categories_by_local_code', array(
+        'methods' => 'GET',
+        'callback' => 'custom_get_categories_by_local_code'
+    ));
+
+	// Registrar los campos para la creación/actualización de productos, agregar el campo 'cod_cat_local', 'category_name'
+	register_rest_field('product', 'cod_cat_local', array(
+		'get_callback' => null,
+		'update_callback' => 'update_product_cod_cat_local',
+		'schema' => array(
+			'description' => __('Código de categoría local'),
+			'type' => 'string',
+			'context' => array('edit')
+		)
+	));
+
+	register_rest_field('product', 'category_name', array(
+		'get_callback' => null,
+		'update_callback' => 'update_product_category_name',
+		'schema' => array(
+			'description' => __('Nombre de la categoría'),
+			'type' => 'string',
+			'context' => array('edit')
+		)
+	));
+
 });
+
 
 function custom_get_advanced_products($request) {
     global $wpdb;
@@ -43,13 +71,13 @@ function custom_get_advanced_products($request) {
 			low_stock.meta_value as low_stock_amount,
 			p.post_excerpt as short_description
 
-        FROM {$wpdb->prefix}posts p
-        INNER JOIN {$wpdb->prefix}postmeta sku ON p.ID = sku.post_id
-        INNER JOIN {$wpdb->prefix}postmeta stock ON p.ID = stock.post_id
-        INNER JOIN {$wpdb->prefix}postmeta price ON p.ID = price.post_id
+        FROM wp0h_posts p
+        INNER JOIN wp0h_postmeta sku ON p.ID = sku.post_id
+        INNER JOIN wp0h_postmeta stock ON p.ID = stock.post_id
+        INNER JOIN wp0h_postmeta price ON p.ID = price.post_id
 
-        LEFT JOIN {$wpdb->prefix}postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
-		LEFT JOIN {$wpdb->prefix}postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
+        LEFT JOIN wp0h_postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
+		LEFT JOIN wp0h_postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
 
         WHERE sku.meta_key = '_sku' 
         AND sku.meta_value IN ($placeholders)
@@ -77,4 +105,105 @@ function custom_get_advanced_products($request) {
     }
 
     return new WP_REST_Response($items, 200);
+}
+
+function custom_get_categories_by_local_code($request) {
+    global $wpdb;
+
+    // Obtén los parámetros de la solicitud
+    $parameters = $request->get_params();
+
+    // Verifica si 'cod_cat_locals' está presente y es una cadena
+    if (!isset($parameters['cod_cat_locals']) || !is_string($parameters['cod_cat_locals'])) {
+        return new WP_Error('invalid_cod_cat_locals', 'No has especificado los códigos de categoría locales', array('status' => 400));
+    }
+
+    // Divide la cadena en un array usando la coma como delimitador
+    $cod_cat_locals = explode(',', $parameters['cod_cat_locals']);
+
+    // Verifica si la división resultó en un array no vacío
+    if (!is_array($cod_cat_locals) || empty($cod_cat_locals)) {
+        return new WP_Error('invalid_cod_cat_locals', 'Parámetro de códigos de categoría locales no válido', array('status' => 400));
+    }
+
+    // Procede con la consulta a la base de datos
+    $placeholders = implode(',', array_fill(0, count($cod_cat_locals), '%s'));
+
+    // Query para obtener las categorías con los cod_cat_locals dados
+    $query = $wpdb->prepare("
+        SELECT 
+            t.term_id, 
+            t.name, 
+            t.slug, 
+            tm.meta_value AS cod_cat_local
+        FROM wp0h_terms t
+        INNER JOIN wp0h_term_taxonomy tt ON t.term_id = tt.term_id
+        LEFT JOIN wp0h_termmeta tm ON t.term_id = tm.term_id AND tm.meta_key = 'cod_cat_local'
+        WHERE tt.taxonomy = 'product_cat'
+        AND tm.meta_value IN ($placeholders)
+    ", $cod_cat_locals);
+
+    $results = $wpdb->get_results($query);
+
+    if (empty($results)) {
+        return new WP_REST_Response([], 200);
+    }
+
+    $items = [];
+    foreach ($results as $result) {
+        $items[] = [
+            'term_id' => (int) $result->term_id,  // ID de categoría
+            'name' => $result->name,
+            'slug' => $result->slug,
+            'cod_cat_local' => $result->cod_cat_local
+        ];
+    }
+
+    return new WP_REST_Response($items, 200);
+}
+
+function update_product_cod_cat_local($value, $object, $field_name) {
+    if (!empty($value)) {
+        global $wpdb;
+
+        // Buscar la categoría por cod_cat_local
+        $term_id = $wpdb->get_var($wpdb->prepare("
+            SELECT t.term_id 
+            FROM wp0h_terms t
+            INNER JOIN wp0h_term_taxonomy tt ON t.term_id = tt.term_id
+            LEFT JOIN wp0h_termmeta tm ON t.term_id = tm.term_id AND tm.meta_key = 'cod_cat_local'
+            WHERE tt.taxonomy = 'product_cat'
+            AND tm.meta_value = %s
+        ", $value));
+
+        // Si la categoría existe, asignarla al producto
+        if ($term_id) {
+            wp_set_object_terms($object->get_id(), (int) $term_id, 'product_cat', false);
+        } elseif (isset($_POST['category_name'])) {
+            // Si no existe, y se proporcionó un nombre de categoría, crear una nueva categoría
+            $category_name = sanitize_text_field($_POST['category_name']);
+
+            // Generar un slug basado en el nombre de la categoría
+            $slug = sanitize_title($category_name);
+
+            // Crear la nueva categoría con el slug
+            $new_term = wp_insert_term($category_name, 'product_cat', array('slug' => $slug));
+            if (!is_wp_error($new_term)) {
+                $term_id = $new_term['term_id'];
+
+                // Guardar el cod_cat_local para la nueva categoría
+                update_term_meta($term_id, 'cod_cat_local', $value);
+
+                // Asignar la nueva categoría al producto
+                wp_set_object_terms($object->get_id(), (int) $term_id, 'product_cat', false);
+            } else {
+                // Manejar el error si falla la creación de la categoría
+                return new WP_Error('category_creation_failed', 'Error al crear la categoría: ' . $new_term->get_error_message(), array('status' => 500));
+            }
+        }
+    }
+}
+
+function update_product_category_name($value, $object, $field_name) {
+    // Esta función se usa solo para registrar el campo, no necesita implementación adicional
 }
