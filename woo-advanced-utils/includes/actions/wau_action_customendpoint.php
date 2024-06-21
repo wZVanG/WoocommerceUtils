@@ -10,6 +10,19 @@ add_action('rest_api_init', function(){
 		'callback' => 'custom_get_advanced_products'
 	));
 
+	// Api para exportar productos sin foto
+    register_rest_route('wau/v1', '/sinfoto', array(
+        'methods' => 'GET',
+        'callback' => 'export_products_csv',
+        'permission_callback' => function () {
+			return true;
+            /*if (!current_user_can('manage_woocommerce')) {
+                return new WP_Error('rest_forbidden', 'Usuario no tiene permisos suficientes', array('status' => 403));
+            }
+            return true;*/
+        }
+    ));
+
 	register_rest_route('wc/v3', '/categories_by_local_code', array(
         'methods' => 'GET',
         'callback' => 'custom_get_categories_by_local_code'
@@ -105,6 +118,57 @@ function custom_get_advanced_products($request) {
     }
 
     return new WP_REST_Response($items, 200);
+}
+
+function export_products_csv() {
+    global $wpdb;
+
+	$query = "
+    SELECT 
+        IF(pm_thumbnail.meta_value IS NULL, 'NO', 'SI') AS tiene_foto,
+        pm_sku.meta_value AS sku, 
+        p.post_title AS producto, 
+        p.ID, 
+        CONCAT('" . site_url('/wp-admin/post.php?post=') . "', p.ID, '&action=edit') AS link_editar,
+        IFNULL(
+            CONCAT('" . site_url('/wp-content/uploads/') . "', 
+            (SELECT meta_value FROM {$wpdb->prefix}postmeta WHERE post_id = pm_thumbnail.meta_value AND meta_key = '_wp_attached_file')), 
+            ''
+        ) AS url_imagen
+    FROM 
+        {$wpdb->prefix}posts p 
+    LEFT JOIN 
+        {$wpdb->prefix}postmeta pm_thumbnail ON p.ID = pm_thumbnail.post_id AND pm_thumbnail.meta_key = '_thumbnail_id' 
+    LEFT JOIN 
+        {$wpdb->prefix}postmeta pm_sku ON p.ID = pm_sku.post_id AND pm_sku.meta_key = '_sku' 
+    WHERE 
+        p.post_type = 'product' 
+        AND pm_sku.meta_value IS NOT NULL 
+    ORDER BY 
+        pm_sku.meta_value ASC 
+    LIMIT 15000
+	";
+
+    $results = $wpdb->get_results($query, ARRAY_A);
+
+    if (empty($results)) {
+        return new WP_Error('no_products', 'No products found', array('status' => 404));
+    }
+
+    $csv_output = "Tiene Foto,SKU,Producto,ID,Link Editar,Imagen\n";
+
+    foreach ($results as $row) {
+        $csv_output .= '"' . implode('","', $row) . '"' . "\n";
+    }
+
+    // Obtener la fecha actual en el formato YYYY-MM-DD
+    $fecha_actual = date('Y-m-d');
+
+    // Forzar la descarga del archivo CSV con nombre dinámico
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment;filename=sinfoto_' . $fecha_actual . '.csv');
+    echo $csv_output;
+    exit;
 }
 
 function custom_get_categories_by_local_code($request) {
