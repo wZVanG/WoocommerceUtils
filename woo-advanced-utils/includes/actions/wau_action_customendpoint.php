@@ -14,14 +14,14 @@ add_action('rest_api_init', function(){
     register_rest_route('wau/v1', '/sinfoto', array(
         'methods' => 'GET',
         'callback' => 'export_products_csv',
-        'permission_callback' => function () {
-			return true;
-            /*if (!current_user_can('manage_woocommerce')) {
-                return new WP_Error('rest_forbidden', 'Usuario no tiene permisos suficientes', array('status' => 403));
-            }
-            return true;*/
-        }
+        // 'permission_callback' => function () {
+        //     if (!current_user_can('manage_woocommerce')) {
+        //         return new WP_Error('rest_forbidden', 'Usuario no tiene permisos suficientes', array('status' => 403));
+        //     }
+        //     return true;
+        // }
     ));
+	
 
 	register_rest_route('wc/v3', '/categories_by_local_code', array(
         'methods' => 'GET',
@@ -82,21 +82,21 @@ function custom_get_advanced_products($request) {
 			price.meta_value as regular_price,
 			ean.meta_value as ean,
 			low_stock.meta_value as low_stock_amount,
-			p.post_excerpt as short_description
-
-        FROM wp0h_posts p
-        INNER JOIN wp0h_postmeta sku ON p.ID = sku.post_id
-        INNER JOIN wp0h_postmeta stock ON p.ID = stock.post_id
-        INNER JOIN wp0h_postmeta price ON p.ID = price.post_id
-
-        LEFT JOIN wp0h_postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
+			p.post_excerpt as short_description,
+			(SELECT GROUP_CONCAT(t.slug SEPARATOR ',')
+			FROM wp0h_term_relationships tr
+			INNER JOIN wp0h_term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+			INNER JOIN wp0h_terms t ON tt.term_id = t.term_id
+			WHERE tr.object_id = p.ID AND tt.taxonomy = 'product_visibility'
+			) as catalog_visibility
+		FROM wp0h_posts p
+		INNER JOIN wp0h_postmeta sku ON p.ID = sku.post_id AND sku.meta_key = '_sku'
+		INNER JOIN wp0h_postmeta stock ON p.ID = stock.post_id AND stock.meta_key = '_stock'
+		INNER JOIN wp0h_postmeta price ON p.ID = price.post_id AND price.meta_key = '_regular_price'
+		LEFT JOIN wp0h_postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
 		LEFT JOIN wp0h_postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
-
-        WHERE sku.meta_key = '_sku' 
-        AND sku.meta_value IN ($placeholders)
-        AND stock.meta_key = '_stock'
-        AND price.meta_key = '_regular_price'
-        AND p.post_type = 'product'
+		WHERE sku.meta_value IN ($placeholders)
+		AND p.post_type = 'product'
 	", $skus);
 
     $results = $wpdb->get_results($query);
@@ -113,7 +113,8 @@ function custom_get_advanced_products($request) {
             'regular_price' => round((float) $result->regular_price, 4),
             'ean' => $result->ean ? $result->ean : null,
 			'low_stock_amount' => $result->low_stock_amount ? round((float) $result->low_stock_amount, 4) : null,
-			'short_description' => is_string($result->short_description) ? trim($result->short_description) : null
+			'short_description' => is_string($result->short_description) ? trim($result->short_description) : null,
+			'catalog_visibility' => $result->catalog_visibility
         ];
     }
 
@@ -144,6 +145,7 @@ function export_products_csv() {
     WHERE 
         p.post_type = 'product' 
         AND pm_sku.meta_value IS NOT NULL 
+		AND pm_thumbnail.meta_value IS NULL
     ORDER BY 
         pm_sku.meta_value ASC 
     LIMIT 15000
@@ -157,7 +159,16 @@ function export_products_csv() {
 
     $csv_output = "Tiene Foto,SKU,Producto,ID,Link Editar,Imagen\n";
 
+	//Obtener productos del archivo test/productos_con_stock_01.csv. El csv solo debe exportar los productos de este archivo.
+	$csv_file = fopen(WAU_PLUGIN_DIR . "/test/productos_con_stock_01.csv", 'r');
+	$skus = [];
+	while (($row = fgetcsv($csv_file)) !== false) {
+		if(isset($row[0])) $skus[] = trim((string) $row[0]);
+	}
+	fclose($csv_file);
+
     foreach ($results as $row) {
+		if (!in_array((string) $row['sku'], $skus)) continue;
         $csv_output .= '"' . implode('","', $row) . '"' . "\n";
     }
 
@@ -166,7 +177,7 @@ function export_products_csv() {
 
     // Forzar la descarga del archivo CSV con nombre dinámico
     header('Content-Type: text/csv');
-    header('Content-Disposition: attachment;filename=sinfoto_' . $fecha_actual . '.csv');
+    header('Content-Disposition: attachment;filename=sinfoto_y_constock_' . $fecha_actual . '.csv');
     echo $csv_output;
     exit;
 }
