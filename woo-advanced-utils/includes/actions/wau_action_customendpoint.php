@@ -7,13 +7,21 @@ if (!defined('ABSPATH')) exit;
 add_action('rest_api_init', function(){
 	register_rest_route('wc/v3', '/products_advanced', array(
 		'methods' => 'GET',
-		'callback' => 'custom_get_advanced_products'
+		'callback' => 'custom_get_advanced_products',
+		'permission_callback' => '__return_true'
+	));
+
+	register_rest_route('wc/v3', '/upsert_categories', array(
+		'methods' => 'POST',
+		'callback' => 'custom_upsert_categories',
+		'permission_callback' => '__return_true'
 	));
 
 	// Api para exportar productos sin foto
     register_rest_route('wau/v1', '/sinfoto', array(
         'methods' => 'GET',
         'callback' => 'export_products_csv',
+		'permission_callback' => '__return_true'
         // 'permission_callback' => function () {
         //     if (!current_user_can('manage_woocommerce')) {
         //         return new WP_Error('rest_forbidden', 'Usuario no tiene permisos suficientes', array('status' => 403));
@@ -25,7 +33,8 @@ add_action('rest_api_init', function(){
 
 	register_rest_route('wc/v3', '/categories_by_local_code', array(
         'methods' => 'GET',
-        'callback' => 'custom_get_categories_by_local_code'
+        'callback' => 'custom_get_categories_by_local_code',
+		'permission_callback' => '__return_true'
     ));
 
 	// Registrar los campos para la creación/actualización de productos, agregar el campo 'cod_cat_local', 'category_name'
@@ -70,34 +79,41 @@ function custom_get_advanced_products($request) {
     // Procede con la consulta a la base de datos
     $placeholders = implode(',', array_fill(0, count($skus), '%s'));
 
-	// Query to get the products (ID, name, sku, stock) with the given SKUs
-	// Obtener también low_stock_amount, short_description
-
-	$query = $wpdb->prepare("
-       	SELECT 
-			p.ID, 
-			p.post_title, 
-			sku.meta_value as sku, 
-			stock.meta_value as stock_quantity, 
-			price.meta_value as regular_price,
-			ean.meta_value as ean,
-			low_stock.meta_value as low_stock_amount,
-			p.post_excerpt as short_description,
-			(SELECT GROUP_CONCAT(t.slug SEPARATOR ',')
-			FROM wp0h_term_relationships tr
-			INNER JOIN wp0h_term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-			INNER JOIN wp0h_terms t ON tt.term_id = t.term_id
-			WHERE tr.object_id = p.ID AND tt.taxonomy = 'product_visibility'
-			) as catalog_visibility
-		FROM wp0h_posts p
-		INNER JOIN wp0h_postmeta sku ON p.ID = sku.post_id AND sku.meta_key = '_sku'
-		INNER JOIN wp0h_postmeta stock ON p.ID = stock.post_id AND stock.meta_key = '_stock'
-		INNER JOIN wp0h_postmeta price ON p.ID = price.post_id AND price.meta_key = '_regular_price'
-		LEFT JOIN wp0h_postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
-		LEFT JOIN wp0h_postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
-		WHERE sku.meta_value IN ($placeholders)
-		AND p.post_type = 'product'
-	", $skus);
+    // Query to get the products (ID, name, sku, stock, etc.) with the given SKUs
+    $query = $wpdb->prepare("
+        SELECT 
+            p.ID, 
+            p.post_title, 
+            sku.meta_value as sku, 
+            stock.meta_value as stock_quantity, 
+            price.meta_value as regular_price,
+            ean.meta_value as ean,
+            low_stock.meta_value as low_stock_amount,
+            p.post_excerpt as short_description,
+            (
+                SELECT JSON_ARRAYAGG(t.slug)
+                FROM wp0h_term_relationships tr
+                INNER JOIN wp0h_term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                INNER JOIN wp0h_terms t ON tt.term_id = t.term_id
+                WHERE tr.object_id = p.ID AND tt.taxonomy = 'product_visibility'
+            ) as catalog_visibility,
+            (
+                SELECT JSON_ARRAYAGG(JSON_OBJECT('id', t.term_id, 'name', t.name, 'cod_cat_local', IFNULL(tm.meta_value, null)))
+                FROM wp0h_term_relationships tr
+                INNER JOIN wp0h_term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+                INNER JOIN wp0h_terms t ON tt.term_id = t.term_id
+                LEFT JOIN wp0h_termmeta tm ON t.term_id = tm.term_id AND tm.meta_key = 'cod_cat_local'
+                WHERE tr.object_id = p.ID AND tt.taxonomy = 'product_cat'
+            ) as product_categories
+        FROM wp0h_posts p
+        INNER JOIN wp0h_postmeta sku ON p.ID = sku.post_id AND sku.meta_key = '_sku'
+        INNER JOIN wp0h_postmeta stock ON p.ID = stock.post_id AND stock.meta_key = '_stock'
+        INNER JOIN wp0h_postmeta price ON p.ID = price.post_id AND price.meta_key = '_regular_price'
+        LEFT JOIN wp0h_postmeta ean ON p.ID = ean.post_id AND ean.meta_key = '_alg_ean'
+        LEFT JOIN wp0h_postmeta low_stock ON p.ID = low_stock.post_id AND low_stock.meta_key = '_low_stock_amount'
+        WHERE sku.meta_value IN ($placeholders)
+        AND p.post_type = 'product'
+    ", $skus);
 
     $results = $wpdb->get_results($query);
 
@@ -105,20 +121,119 @@ function custom_get_advanced_products($request) {
 
     $items = [];
     foreach ($results as $result) {
-		$items[] = [
+        $catalog_visibility_array = !empty($result->catalog_visibility) ? json_decode($result->catalog_visibility, true) : [];
+        $categories_array = !empty($result->product_categories) ? json_decode($result->product_categories, true) : [];
+
+        $items[] = [
             'id' => (int) $result->ID,
             'name' => $result->post_title,
             'sku' => $result->sku,
             'stock_quantity' => round((float) $result->stock_quantity, 4),
             'regular_price' => round((float) $result->regular_price, 4),
             'ean' => $result->ean ? $result->ean : null,
-			'low_stock_amount' => $result->low_stock_amount ? round((float) $result->low_stock_amount, 4) : null,
-			'short_description' => is_string($result->short_description) ? trim($result->short_description) : null,
-			'catalog_visibility' => $result->catalog_visibility
+            'low_stock_amount' => $result->low_stock_amount ? round((float) $result->low_stock_amount, 4) : null,
+            'short_description' => is_string($result->short_description) ? trim($result->short_description) : null,
+            'catalog_visibility' => $catalog_visibility_array,
+            'categories' => $categories_array
         ];
     }
 
     return new WP_REST_Response($items, 200);
+}
+
+
+function custom_upsert_categories($request) {
+    $parameters = $request->get_params();
+
+    if (!isset($parameters['categories']) || !is_array($parameters['categories'])) {
+        return new WP_Error('invalid_categories', 'No has especificado un array válido de categorías', array('status' => 400));
+    }
+
+    $categories = array_map(function($category) {
+        return [
+            'id' => isset($category['id']) ? intval($category['id']) : null,
+            'name' => sanitize_text_field($category['name'])
+        ];
+    }, $parameters['categories']);
+
+    $results = [];
+
+    foreach ($categories as $category) {
+        $id = $category['id'];
+        $name = $category['name'];
+        $normalized_name = wau_normalize_text($name);
+
+        if ($id) {
+            // Intentar obtener la categoría por ID
+            $existing_term_by_id = get_term_by('id', $id, 'product_cat');
+
+            if ($existing_term_by_id && !is_wp_error($existing_term_by_id)) {
+                // Si la categoría existe, actualizarla
+                $term = wp_update_term($id, 'product_cat', ['name' => $name, 'slug' => sanitize_title($normalized_name)]);
+                
+                if (is_wp_error($term)) {
+                    $results[] = [
+                        'category_name' => $name,
+                        'category_id' => $id,
+                        'error' => $term->get_error_message(),
+                        'status' => 'error'
+                    ];
+                } else {
+                    $results[] = [
+                        'category_name' => $name,
+                        'category_id' => $id,
+                        'status' => 'updated'
+                    ];
+                }
+            } else {
+                // Si la categoría no existe, crear una nueva con el nombre proporcionado
+                $new_term = wp_insert_term($name, 'product_cat', array('slug' => sanitize_title($normalized_name)));
+                
+                if (is_wp_error($new_term)) {
+                    $results[] = [
+                        'category_name' => $name,
+                        'error' => $new_term->get_error_message(),
+                        'status' => 'error'
+                    ];
+                } else {
+                    $results[] = [
+                        'category_name' => $name,
+                        'category_id' => $new_term['term_id'],
+                        'status' => 'created'
+                    ];
+                }
+            }
+        } else {
+            // Si no se proporciona un ID, buscar o crear la categoría
+            $existing_term = get_term_by('slug', sanitize_title($normalized_name), 'product_cat');
+
+            if ($existing_term && !is_wp_error($existing_term)) {
+                $results[] = [
+                    'category_name' => $name,
+                    'category_id' => $existing_term->term_id,
+                    'status' => 'exists'
+                ];
+            } else {
+                $new_term = wp_insert_term($name, 'product_cat', array('slug' => sanitize_title($normalized_name)));
+
+                if (is_wp_error($new_term)) {
+                    $results[] = [
+                        'category_name' => $name,
+                        'error' => $new_term->get_error_message(),
+                        'status' => 'error'
+                    ];
+                } else {
+                    $results[] = [
+                        'category_name' => $name,
+                        'category_id' => $new_term['term_id'],
+                        'status' => 'created'
+                    ];
+                }
+            }
+        }
+    }
+
+    return new WP_REST_Response($results, 200);
 }
 
 function export_products_csv() {
@@ -207,7 +322,7 @@ function custom_get_categories_by_local_code($request) {
     // Query para obtener las categorías con los cod_cat_locals dados
     $query = $wpdb->prepare("
         SELECT 
-            t.term_id, 
+            t.term_id AS category_id, 
             t.name, 
             t.slug, 
             tm.meta_value AS cod_cat_local
@@ -227,7 +342,7 @@ function custom_get_categories_by_local_code($request) {
     $items = [];
     foreach ($results as $result) {
         $items[] = [
-            'term_id' => (int) $result->term_id,  // ID de categoría
+            'category_id' => (int) $result->category_id,  // ID de categoría
             'name' => $result->name,
             'slug' => $result->slug,
             'cod_cat_local' => $result->cod_cat_local
@@ -279,6 +394,19 @@ function update_product_cod_cat_local($value, $object, $field_name) {
     }
 }
 
+function wau_normalize_text($text) {
+    $unwanted_array = array(
+        'Á'=>'A', 'À'=>'A', 'Â'=>'A', 'Ä'=>'A', 'á'=>'a', 'à'=>'a', 'ä'=>'a', 'â'=>'a',
+        'É'=>'E', 'È'=>'E', 'Ê'=>'E', 'Ë'=>'E', 'é'=>'e', 'è'=>'e', 'ë'=>'e', 'ê'=>'e',
+        'Í'=>'I', 'Ì'=>'I', 'Ï'=>'I', 'Î'=>'I', 'í'=>'i', 'ì'=>'i', 'ï'=>'i', 'î'=>'i',
+        'Ó'=>'O', 'Ò'=>'O', 'Ö'=>'O', 'Ô'=>'O', 'ó'=>'o', 'ò'=>'o', 'ö'=>'o', 'ô'=>'o',
+        'Ú'=>'U', 'Ù'=>'U', 'Ü'=>'U', 'Û'=>'U', 'ú'=>'u', 'ù'=>'u', 'ü'=>'u', 'û'=>'u',
+        'Ñ'=>'N', 'ñ'=>'n', 'Ç'=>'C', 'ç'=>'c'
+    );
+    return strtr($text, $unwanted_array);
+}
+
 function update_product_category_name($value, $object, $field_name) {
     // Esta función se usa solo para registrar el campo, no necesita implementación adicional
 }
+
