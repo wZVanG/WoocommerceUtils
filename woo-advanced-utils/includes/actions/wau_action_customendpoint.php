@@ -149,10 +149,21 @@ function custom_upsert_categories($request) {
         return new WP_Error('invalid_categories', 'No has especificado un array válido de categorías', array('status' => 400));
     }
 
+	//Validar que las categorías tengan los campos requeridos
+	foreach ($parameters['categories'] as $category){
+		if (!isset($category['name']) || !is_string($category['name'])) {
+			return new WP_Error('invalid_categories', 'Las categorías deben tener un nombre', array('status' => 400));
+		}
+		if (!isset($category['cod_cat_local']) || !is_numeric($category['cod_cat_local'])) {
+			return new WP_Error('invalid_categories', 'Las categorías deben tener un código de categoría local', array('status' => 400));
+		}
+	}
+
     $categories = array_map(function($category) {
         return [
             'id' => isset($category['id']) ? intval($category['id']) : null,
-            'name' => sanitize_text_field($category['name'])
+            'name' => sanitize_text_field($category['name']),
+			'cod_cat_local' => isset($category['cod_cat_local']) ? intval($category['cod_cat_local']) : null
         ];
     }, $parameters['categories']);
 
@@ -161,6 +172,7 @@ function custom_upsert_categories($request) {
     foreach ($categories as $category) {
         $id = $category['id'];
         $name = $category['name'];
+		$cod_cat_local = $category['cod_cat_local'];
         $normalized_name = wau_normalize_text($name);
 
         if ($id) {
@@ -173,15 +185,21 @@ function custom_upsert_categories($request) {
                 
                 if (is_wp_error($term)) {
                     $results[] = [
-                        'category_name' => $name,
-                        'category_id' => $id,
+                        'name' => $name,
+                        'id' => $id,
+						'cod_cat_local' => $cod_cat_local,
                         'error' => $term->get_error_message(),
                         'status' => 'error'
                     ];
                 } else {
+					
+					//Guardar el cod_cat_local
+					update_term_meta($id, 'cod_cat_local', $cod_cat_local);
+
                     $results[] = [
-                        'category_name' => $name,
-                        'category_id' => $id,
+                        'name' => $name,
+                        'id' => $id,
+						'cod_cat_local' => $cod_cat_local,
                         'status' => 'updated'
                     ];
                 }
@@ -191,14 +209,20 @@ function custom_upsert_categories($request) {
                 
                 if (is_wp_error($new_term)) {
                     $results[] = [
-                        'category_name' => $name,
+                        'name' => $name,
+						'cod_cat_local' => $cod_cat_local,
                         'error' => $new_term->get_error_message(),
                         'status' => 'error'
                     ];
                 } else {
+
+					//Guardar el cod_cat_local
+					update_term_meta($new_term['term_id'], 'cod_cat_local', $cod_cat_local);
+
                     $results[] = [
-                        'category_name' => $name,
-                        'category_id' => $new_term['term_id'],
+                        'name' => $name,
+                        'id' => $new_term['term_id'],
+						'cod_cat_local' => $cod_cat_local,
                         'status' => 'created'
                     ];
                 }
@@ -208,9 +232,14 @@ function custom_upsert_categories($request) {
             $existing_term = get_term_by('slug', sanitize_title($normalized_name), 'product_cat');
 
             if ($existing_term && !is_wp_error($existing_term)) {
+
+				//Guardar el cod_cat_local
+				update_term_meta($existing_term->term_id, 'cod_cat_local', $cod_cat_local);
+
                 $results[] = [
-                    'category_name' => $name,
-                    'category_id' => $existing_term->term_id,
+                    'name' => $name,
+                    'id' => $existing_term->term_id,
+					'cod_cat_local' => $cod_cat_local,
                     'status' => 'exists'
                 ];
             } else {
@@ -218,14 +247,20 @@ function custom_upsert_categories($request) {
 
                 if (is_wp_error($new_term)) {
                     $results[] = [
-                        'category_name' => $name,
+                        'name' => $name,
                         'error' => $new_term->get_error_message(),
+						'cod_cat_local' => $cod_cat_local,
                         'status' => 'error'
                     ];
                 } else {
+
+					//Guardar el cod_cat_local
+					update_term_meta($new_term['term_id'], 'cod_cat_local', $cod_cat_local);
+
                     $results[] = [
-                        'category_name' => $name,
-                        'category_id' => $new_term['term_id'],
+                        'name' => $name,
+                        'id' => $new_term['term_id'],
+						'cod_cat_local' => $cod_cat_local,
                         'status' => 'created'
                     ];
                 }
