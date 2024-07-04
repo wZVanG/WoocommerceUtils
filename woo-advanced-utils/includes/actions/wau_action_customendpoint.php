@@ -161,9 +161,9 @@ function custom_upsert_categories($request) {
 
     $categories = array_map(function($category) {
         return [
-            'id' => isset($category['id']) ? intval($category['id']) : null,
+            'id' => !empty($category['id']) ? intval($category['id']) : null,
             'name' => sanitize_text_field($category['name']),
-			'cod_cat_local' => isset($category['cod_cat_local']) ? intval($category['cod_cat_local']) : null
+			'cod_cat_local' => !empty($category['cod_cat_local']) ? intval($category['cod_cat_local']) : null
         ];
     }, $parameters['categories']);
 
